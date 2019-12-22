@@ -79,7 +79,14 @@ AC_EGREP_HEADER([DiagnosticsEngine], [clang/Basic/Diagnostic.h],
 	[Define to Diagnostic for older versions of clang])])
 AC_EGREP_HEADER([ArrayRef], [clang/Driver/Driver.h],
 	[AC_DEFINE([USE_ARRAYREF], [],
-		[Define if Driver::BuildCompilation takes ArrayRef])])
+		[Define if Driver::BuildCompilation takes ArrayRef])
+	AC_EGREP_HEADER([ArrayRef.*CommandLineArgs],
+		[clang/Frontend/CompilerInvocation.h],
+		[AC_DEFINE([CREATE_FROM_ARGS_TAKES_ARRAYREF], [],
+			[Define if CompilerInvocation::CreateFromArgs takes
+			 ArrayRef])
+		])
+	])
 AC_EGREP_HEADER([getReturnType], [clang/AST/Decl.h], [],
 	[AC_DEFINE([getReturnType], [getResultType],
 	[Define to getResultType for older versions of clang])])
@@ -184,8 +191,11 @@ AC_EGREP_HEADER([initializeBuiltins],
 	[AC_DEFINE([initializeBuiltins], [InitializeBuiltins],
 		[Define to InitializeBuiltins for older versions of clang])])
 AC_EGREP_HEADER([IK_C], [clang/Frontend/FrontendOptions.h], [],
-	 [AC_DEFINE([IK_C], [InputKind::C],
-	    [Define to InputKind::C for newer versions of clang])])
+	[AC_CHECK_HEADER([clang/Basic/LangStandard.h],
+		[IK_C=Language::C], [IK_C=InputKind::C])
+	 AC_DEFINE_UNQUOTED([IK_C], [$IK_C],
+	 [Define to Language::C or InputKind::C for newer versions of clang])
+	])
 AC_TRY_COMPILE([
 	#include <clang/Basic/TargetOptions.h>
 	#include <clang/Lex/PreprocessorOptions.h>
@@ -222,6 +232,13 @@ AC_TRY_COMPILE([
 AC_CHECK_HEADER([llvm/Option/Arg.h],
 	[AC_DEFINE([HAVE_LLVM_OPTION_ARG_H], [],
 		   [Define if llvm/Option/Arg.h exists])])
+AC_EGREP_HEADER([PragmaIntroducer ],
+	[clang/Lex/Pragma.h], [],
+	[AC_DEFINE([PragmaIntroducer], [PragmaIntroducerKind],
+		[Define to PragmaIntroducerKind for older versions of clang])])
+AC_CHECK_HEADER([clang/Basic/LangStandard.h],
+	[AC_DEFINE([HAVE_CLANG_BASIC_LANGSTANDARD_H], [],
+		   [Define if clang/Basic/LangStandard.h exists])])
 AC_LANG_POP
 CPPFLAGS="$SAVE_CPPFLAGS"
 

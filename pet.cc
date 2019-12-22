@@ -33,6 +33,7 @@
  */ 
 
 #include "config.h"
+#undef PACKAGE
 
 #include <stdlib.h>
 #include <map>
@@ -70,7 +71,11 @@
 #else
 #include <clang/Frontend/HeaderSearchOptions.h>
 #endif
+#ifdef HAVE_CLANG_BASIC_LANGSTANDARD_H
+#include <clang/Basic/LangStandard.h>
+#else
 #include <clang/Frontend/LangStandard.h>
+#endif
 #ifdef HAVE_LEX_PREPROCESSOROPTIONS_H
 #include <clang/Lex/PreprocessorOptions.h>
 #else
@@ -166,7 +171,7 @@ struct PragmaValueBoundsHandler : public PragmaHandler {
 	}
 
 	virtual void HandlePragma(Preprocessor &PP,
-				  PragmaIntroducerKind Introducer,
+				  PragmaIntroducer Introducer,
 				  Token &ScopTok) {
 		isl_id *id;
 		isl_space *dim;
@@ -270,7 +275,7 @@ struct PragmaParameterHandler : public PragmaHandler {
 		context_value(context_value) {}
 
 	virtual void HandlePragma(Preprocessor &PP,
-				  PragmaIntroducerKind Introducer,
+				  PragmaIntroducer Introducer,
 				  Token &ScopTok) {
 		isl_id *id;
 		isl_ctx *ctx = isl_set_get_ctx(context);
@@ -335,7 +340,7 @@ struct PragmaPencilHandler : public PragmaHandler {
 		PragmaHandler("pencil"), independent(independent) {}
 
 	virtual void HandlePragma(Preprocessor &PP,
-				  PragmaIntroducerKind Introducer,
+				  PragmaIntroducer Introducer,
 				  Token &PencilTok) {
 		Token token;
 		IdentifierInfo *info;
@@ -435,7 +440,7 @@ struct PragmaScopHandler : public PragmaHandler {
 		PragmaHandler("scop"), scops(scops) {}
 
 	virtual void HandlePragma(Preprocessor &PP,
-				  PragmaIntroducerKind Introducer,
+				  PragmaIntroducer Introducer,
 				  Token &ScopTok) {
 		SourceManager &SM = PP.getSourceManager();
 		SourceLocation sloc = ScopTok.getLocation();
@@ -457,7 +462,7 @@ struct PragmaEndScopHandler : public PragmaHandler {
 		PragmaHandler("endscop"), scops(scops) {}
 
 	virtual void HandlePragma(Preprocessor &PP,
-				  PragmaIntroducerKind Introducer,
+				  PragmaIntroducer Introducer,
 				  Token &EndScopTok) {
 		SourceManager &SM = PP.getSourceManager();
 		SourceLocation sloc = EndScopTok.getLocation();
@@ -479,7 +484,7 @@ struct PragmaLiveOutHandler : public PragmaHandler {
 		PragmaHandler("live"), sema(sema), live_out(live_out) {}
 
 	virtual void HandlePragma(Preprocessor &PP,
-				  PragmaIntroducerKind Introducer,
+				  PragmaIntroducer Introducer,
 				  Token &ScopTok) {
 		Token token;
 
@@ -822,6 +827,32 @@ struct ClangAPI {
 	static Command *command(Command &C) { return &C; }
 };
 
+#ifdef CREATE_FROM_ARGS_TAKES_ARRAYREF
+
+/* Call CompilerInvocation::CreateFromArgs with the right arguments.
+ * In this case, an ArrayRef<const char *>.
+ */
+static void create_from_args(CompilerInvocation &invocation,
+	const ArgStringList *args, DiagnosticsEngine &Diags)
+{
+	CompilerInvocation::CreateFromArgs(invocation, *args, Diags);
+}
+
+#else
+
+/* Call CompilerInvocation::CreateFromArgs with the right arguments.
+ * In this case, two "const char *" pointers.
+ */
+static void create_from_args(CompilerInvocation &invocation,
+	const ArgStringList *args, DiagnosticsEngine &Diags)
+{
+	CompilerInvocation::CreateFromArgs(invocation, args->data() + 1,
+						args->data() + args->size(),
+						Diags);
+}
+
+#endif
+
 /* Create a CompilerInvocation object that stores the command line
  * arguments constructed by the driver.
  * The arguments are mainly useful for setting up the system include
@@ -848,9 +879,7 @@ static CompilerInvocation *construct_invocation(const char *filename,
 	const ArgStringList *args = &cmd->getArguments();
 
 	CompilerInvocation *invocation = new CompilerInvocation;
-	CompilerInvocation::CreateFromArgs(*invocation, args->data() + 1,
-						args->data() + args->size(),
-						Diags);
+	create_from_args(*invocation, args, Diags);
 	return invocation;
 }
 
@@ -1018,6 +1047,44 @@ static void set_invocation(CompilerInstance *Clang,
 
 #endif
 
+/* Helper function for ignore_error that only gets enabled if T
+ * (which is either const FileEntry * or llvm::ErrorOr<const FileEntry *>)
+ * has getError method, i.e., if it is llvm::ErrorOr<const FileEntry *>.
+ */
+template <class T>
+static const FileEntry *ignore_error_helper(const T obj, int,
+	int[1][sizeof(obj.getError())])
+{
+	return *obj;
+}
+
+/* Helper function for ignore_error that is always enabled,
+ * but that only gets selected if the variant above is not enabled,
+ * i.e., if T is const FileEntry *.
+ */
+template <class T>
+static const FileEntry *ignore_error_helper(const T obj, long, void *)
+{
+	return obj;
+}
+
+/* Given either a const FileEntry * or a llvm::ErrorOr<const FileEntry *>,
+ * extract out the const FileEntry *.
+ */
+template <class T>
+static const FileEntry *ignore_error(const T obj)
+{
+	return ignore_error_helper(obj, 0, NULL);
+}
+
+/* Return the FileEntry corresponding to the given file name
+ * in the given compiler instances, ignoring any error.
+ */
+static const FileEntry *getFile(CompilerInstance *Clang, std::string Filename)
+{
+	return ignore_error(Clang->getFileManager().getFile(Filename));
+}
+
 /* Add pet specific predefines to the preprocessor.
  * Currently, these are all pencil specific, so they are only
  * added if "pencil" is set.
@@ -1058,15 +1125,15 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 	create_diagnostics(Clang);
 	DiagnosticsEngine &Diags = Clang->getDiagnostics();
 	Diags.setSuppressSystemWarnings(true);
+	TargetInfo *target = create_target_info(Clang, Diags);
+	Clang->setTarget(target);
+	set_lang_defaults(Clang);
 	CompilerInvocation *invocation = construct_invocation(filename, Diags);
 	if (invocation)
 		set_invocation(Clang, invocation);
 	Diags.setClient(construct_printer(Clang, options->pencil));
 	Clang->createFileManager();
 	Clang->createSourceManager(Clang->getFileManager());
-	TargetInfo *target = create_target_info(Clang, Diags);
-	Clang->setTarget(target);
-	set_lang_defaults(Clang);
 	HeaderSearchOptions &HSO = Clang->getHeaderSearchOpts();
 	HSO.ResourceDir = ResourceDir;
 	for (int i = 0; i < options->n_path; ++i)
@@ -1082,7 +1149,7 @@ static isl_stat foreach_scop_in_C_source(isl_ctx *ctx,
 
 	ScopLocList scops;
 
-	const FileEntry *file = Clang->getFileManager().getFile(filename);
+	const FileEntry *file = getFile(Clang, filename);
 	if (!file)
 		isl_die(ctx, isl_error_unknown, "unable to open file",
 			do { delete Clang; return isl_stat_error; } while (0));
