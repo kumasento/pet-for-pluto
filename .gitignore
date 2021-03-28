@@ -14,3 +14,31 @@ m4/lt~obsolete.m4
 interface/pet.pyc
 
 tags
+
+# Automatically generated files
+*.lo
+*.o
+*.log
+*.a
+*.la
+*.pc
+*.Plo
+*.Po
+*.so
+*.so.*
+*.lai
+
+all.c
+codegen_test.sh
+config.h
+config.status
+gitversion.h
+pet_test.sh
+pet_uninstalled.sh
+pet-uninstalled.sh
+pet.pc.in
+Makefile
+pet_check_code
+pet_codegen
+stamp-h1
+libtool
